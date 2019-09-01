@@ -24,6 +24,12 @@
               <b-table-column field="last_scan" label="Last scan" sortable>
                 {{distanceInWordsToNow(parse(props.row.last_scan))}} ago
               </b-table-column>
+              <b-table-column field="is_available" label="Action" sortable>
+                <a :class="{ 'button': true, 'is-button': true, 'is-danger': props.row.file_count !== props.row.unmatched_count, 'is-warning': props.row.file_count === props.row.unmatched_count}"
+                   v-on:click="removeFolder(props)">
+                  <b-icon pack="fas" icon="trash"></b-icon>
+                </a>
+              </b-table-column>
             </template>
             <template slot="footer">
               <td></td>
@@ -90,6 +96,10 @@
       },
       addFolder: async function () {
         await ky.post(`/api/config/volume`, {json: {path: this.newVolumePath}}).json();
+        this.$store.dispatch("optionsFolders/load");
+      },
+      removeFolder: async function (folder) {
+        await ky.delete(`/api/config/volume/${folder.id}`).json();
         this.$store.dispatch("optionsFolders/load");
       }
     },
