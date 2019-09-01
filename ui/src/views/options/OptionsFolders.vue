@@ -99,7 +99,9 @@
         this.$store.dispatch("optionsFolders/load");
       },
       removeFolder: async function (folder) {
-        await ky.delete(`/api/config/volume/${folder.id}`).json();
+        // TODO: add confirmation
+        await ky.delete(`/api/config/volume/${folder.row.id}`).json();
+        // TODO: hook folder load into async callback
         this.$store.dispatch("optionsFolders/load");
       }
     },
