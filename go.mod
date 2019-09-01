@@ -4,6 +4,7 @@ require (
 	github.com/ProtonMail/go-appdir v1.0.0
 	github.com/PuerkitoBio/goquery v1.5.0
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
+	github.com/UnnoTed/fileb0x v1.1.3 // indirect
 	github.com/anacrolix/envpprof v1.0.0 // indirect
 	github.com/anacrolix/ffprobe v0.0.0-20190307025918-9b483c5f7751
 	github.com/anacrolix/missinggo v1.1.0 // indirect
