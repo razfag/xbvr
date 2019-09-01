@@ -79,7 +79,7 @@ func (i ConfigResource) listVolume(req *restful.Request, resp *restful.Response)
 	defer db.Close()
 
 	var vol []Volume
-	db.Raw(`select path, last_scan,is_available, is_enabled,
+	db.Raw(`select id, path, last_scan,is_available, is_enabled,
        	(select count(*) from files where files.path like volumes.path || "%") as file_count,
 		(select count(*) from files where files.path like volumes.path || "%" and files.scene_id = 0) as unmatched_count,
        	(select sum(files.size) from files where files.path like volumes.path || "%") as total_size
