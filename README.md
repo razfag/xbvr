@@ -1,6 +1,6 @@
-[![Build Status](https://cloud.drone.io/api/badges/cld9x/xbvr/status.svg)](https://cloud.drone.io/cld9x/xbvr) ![GitHub release](https://img.shields.io/github/release/cld9x/xbvr.svg)
+[![Build Status](https://cloud.drone.io/api/badges/xbapps/xbvr/status.svg)](https://cloud.drone.io/xbapps/xbvr) ![GitHub release](https://img.shields.io/github/release/xbapps/xbvr.svg)
 <br>
-<sup><sub><em>Windows 10 • OSX • Linux • Raspberry Pi</em></sub></sup>
+<sup><sub><em>Windows 10 • macOS • Linux • Raspberry Pi</em></sub></sup>
 
 <h1 align="center">
     <img src="https://i.imgur.com/T2UvcHc.png" width="250"/>
@@ -12,7 +12,7 @@
 
 <p align="center">
     <strong>
-        <a href="https://feedback.xbvr.app/">Suggestions</a>
+        <a href="https://github.com/xbapps/xbvr/issues">Suggestions</a>
         •
         <a href="https://discord.gg/wdCHXAG">Discord</a>
     </strong>
@@ -27,7 +27,8 @@
 ## Features
 
 - Automatically match title, tags, cast, cover image, and more to your videos
-- Support for all the most popular VR sites: BadoinkVR, CzechVR Network, DDFNetworkVR, MilfVR, NaughtyAmericaVR, SexBabesVR, StasyQVR, TmwVRnet, VirtualRealPorn, VirtualTaboo, VRBangers, VRHush, and WankzVR
+- Support for all the most popular VR sites: BadoinkVR, CzechVR Network, DDFNetworkVR, MilfVR, NaughtyAmericaVR, SexBabesVR, StasyQVR, TmwVRnet, VirtualRealPorn, VirtualTaboo, VRBangers, VRHush, VRLatina and WankzVR
+- Supports DeoVR web mode
 - Built-in DLNA streaming server compatible with popular VR players (Pigasus, Skybox, Mobile Station VR)
 - Sleek and simple web UI
 - Browse your content by cast, site, tags, and release date
@@ -35,9 +36,22 @@
 
 ## Download
 
-The latest version is always available on the [releases page](https://github.com/cld9x/xbvr/releases).
+The latest version is always available on the [releases page](https://github.com/xbapps/xbvr/releases).
 
-App is also available in form of Docker image, which makes it possible to run in more specialized environments such as QNAP NAS - downloads at [Docker Hub](https://hub.docker.com/r/cld9x/xbvr). 
+App is also available in form of Docker image, which makes it possible to run in more specialized environments such as QNAP NAS - downloads at [Docker Hub](https://hub.docker.com/r/xbapps/xbvr).
+
+To run this container in docker:
+
+```
+docker run -t --name=xbvr --net=host --restart=always \
+   --mount type=bind,source=/path/to/your/videos,target=/videos,readonly \
+   --mount source=xbvr-config,target=/root/.config/ \
+   xbapps/xbvr:latest
+```
+
+Adding `-d` to the docker command will run the container in the background.
+
+In docker, your videos will be mounted at /videos and you should add this path in Options -> Folders.
 
 Please note that during the first run XBVR automatically installs `ffprobe` and `ffmpeg` codecs from [ffbinaries site](https://ffbinaries.com/downloads).
 
@@ -53,6 +67,36 @@ Enjoy!
 
 ## Questions & Suggestions
 
-Submit and vote on features at [Feedback site](https://feedback.xbvr.app/).
-
 Ask your questions and suggest features on [Discord](https://discord.gg/wdCHXAG).
+
+## Development
+
+Make sure you have following installed:
+
+- Go 1.12
+- Node.js 10.x
+- Yarn 1.17.x
+- fileb0x (run `go get github.com/UnnoTed/fileb0x` outside project directory)
+- modd (run `env GO111MODULE=on go get github.com/cortesi/modd/cmd/modd` outside project directory)
+
+Once all of the above is installed, running `modd` from project directory launches file-watchers providing livereload for both Go and JavaScript.
+
+## Development in Gitpod
+
+This project is configured for use in Gitpod. It will provide you with a pre-built development environment with all the tools needed to compile XBVR.
+
+When the workspace loads, modd runs and will build and start XBVR automatically. Every time you make a change to a file, modd will automatically compile the relevant code.
+
+Once XBVR is compiled and starts, a preview panel will open in the IDE. As you modify go files, the preview panel will reload with the latest changes. If you make changes to Vue, you'll need to reload the browser to load the updated JavaScript.
+
+Currently, it's only possible to test XBVR core and Browser applications using Gitpod. Because DLNA requires a local network, you won't be able to connect to the DLNA server running in Gitpod. For most people, this is fine.
+
+sqlite3 is included in the terminal. The XBVR database is located at /home/gitpod/.config/xbvr/main.db
+
+sqlite-web is also included. To browse the db, you can run `sqlite_web /home/gitpod/.config/xbvr/main.db`.
+
+Gitpod has GitHub integration and, once authorized, can fork this repo into your account, push/pull changes, and create pull requests.
+
+Ready to get started?
+
+[![Open in Gitpod](https://gitpod.io/button/open-in-gitpod.svg)](https://gitpod.io/#https://github.com/xbapps/xbvr)

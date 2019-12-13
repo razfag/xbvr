@@ -1,4 +1,4 @@
-package xbvr
+package models
 
 import (
 	"encoding/json"
@@ -6,10 +6,28 @@ import (
 	"time"
 
 	"github.com/araddon/dateparse"
-	"github.com/cld9x/xbvr/pkg/scrape"
 	"github.com/jinzhu/gorm"
 )
 
+// SceneCuepoint data model
+type SceneCuepoint struct {
+	ID        uint      `gorm:"primary_key" json:"id"`
+	CreatedAt time.Time `json:"-"`
+	UpdatedAt time.Time `json:"-"`
+
+	SceneID   uint    `json:"-"`
+	TimeStart float64 `json:"time_start"`
+	Name      string  `json:"name"`
+}
+
+func (o *SceneCuepoint) Save() error {
+	db, _ := GetDB()
+	err := db.Save(o).Error
+	db.Close()
+	return err
+}
+
+// Scene data model
 type Scene struct {
 	ID        uint       `gorm:"primary_key" json:"id"`
 	CreatedAt time.Time  `json:"created_at"`
@@ -32,11 +50,22 @@ type Scene struct {
 	ReleaseDateText string    `json:"release_date_text"`
 	CoverURL        string    `json:"cover_url"`
 	SceneURL        string    `json:"scene_url"`
-	Rating          int       `json:"rating"`
-	Favourite       bool      `json:"favourite"`
-	Watchlist       bool      `json:"watchlist"`
-	IsAvailable     bool      `json:"is_available"`
-	IsAccessible    bool      `json:"is_accessible"`
+
+	StarRating   float64         `json:"star_rating"`
+	Favourite    bool            `json:"favourite" gorm:"default:false"`
+	Watchlist    bool            `json:"watchlist" gorm:"default:false"`
+	IsAvailable  bool            `json:"is_available" gorm:"default:false"`
+	IsAccessible bool            `json:"is_accessible" gorm:"default:false"`
+	IsWatched    bool            `json:"is_watched" gorm:"default:false"`
+	Cuepoints    []SceneCuepoint `json:"cuepoints"`
+	History      []History       `json:"history"`
+	AddedDate    time.Time       `json:"added_date"`
+	LastOpened   time.Time       `json:"last_opened"`
+
+	NeedsUpdate bool `json:"needs_update"`
+
+	Fulltext string  `gorm:"-" json:"fulltext"`
+	Score    float64 `gorm:"-" json:"_score"`
 }
 
 type Image struct {
@@ -52,18 +81,51 @@ func (i *Scene) Save() error {
 	return err
 }
 
+func (i *Scene) ToJSON() ([]byte, error) {
+	return json.Marshal(i)
+}
+
+func (i *Scene) FromJSON(data []byte) error {
+	return json.Unmarshal(data, &i)
+}
+
 func (o *Scene) GetIfExist(id string) error {
 	db, _ := GetDB()
 	defer db.Close()
 
-	return db.Preload("Tags").Preload("Cast").Where(&Scene{SceneID: id}).First(o).Error
+	return db.
+		Preload("Tags").
+		Preload("Cast").
+		Preload("Files").
+		Preload("History").
+		Preload("Cuepoints").
+		Where(&Scene{SceneID: id}).First(o).Error
+}
+
+func (o *Scene) GetIfExistByPK(id uint) error {
+	db, _ := GetDB()
+	defer db.Close()
+
+	return db.
+		Preload("Tags").
+		Preload("Cast").
+		Preload("Files").
+		Preload("History").
+		Preload("Cuepoints").
+		Where(&Scene{ID: id}).First(o).Error
 }
 
 func (o *Scene) GetIfExistURL(u string) error {
 	db, _ := GetDB()
 	defer db.Close()
 
-	return db.Preload("Tags").Preload("Cast").Where(&Scene{SceneURL: u}).First(o).Error
+	return db.
+		Preload("Tags").
+		Preload("Cast").
+		Preload("Files").
+		Preload("History").
+		Preload("Cuepoints").
+		Where(&Scene{SceneURL: u}).First(o).Error
 }
 
 func (o *Scene) GetFiles() ([]File, error) {
@@ -71,15 +133,65 @@ func (o *Scene) GetFiles() ([]File, error) {
 	defer db.Close()
 
 	var files []File
-	db.Where(&File{SceneID: o.ID}).Find(&files)
+	db.Preload("Volume").Where(&File{SceneID: o.ID}).Find(&files)
 
 	return files, nil
 }
 
-func SceneCreateUpdateFromExternal(db *gorm.DB, ext scrape.ScrapedScene) error {
+func (o *Scene) UpdateStatus() {
+	// Check if file with scene association exists
+	files, err := o.GetFiles()
+	if err != nil {
+		return
+	}
+
+	changed := false
+
+	if len(files) > 0 {
+		if !o.IsAvailable {
+			o.IsAvailable = true
+			changed = true
+		}
+
+		var newestFileDate time.Time
+		for j := range files {
+			if files[j].Exists() {
+				if files[j].CreatedTime.Before(newestFileDate) || newestFileDate.IsZero() {
+					newestFileDate = files[j].CreatedTime
+				}
+				if !o.IsAccessible {
+					o.IsAccessible = true
+					changed = true
+				}
+			} else {
+				if o.IsAccessible {
+					o.IsAccessible = false
+					changed = true
+				}
+			}
+		}
+
+		if !newestFileDate.Equal(o.AddedDate) && !newestFileDate.IsZero() {
+			o.AddedDate = newestFileDate
+			changed = true
+		}
+	} else {
+		if o.IsAvailable {
+			o.IsAvailable = false
+			changed = true
+		}
+	}
+
+	if changed {
+		o.Save()
+	}
+}
+
+func SceneCreateUpdateFromExternal(db *gorm.DB, ext ScrapedScene) error {
 	var o Scene
 	db.Where(&Scene{SceneID: ext.SceneID}).FirstOrCreate(&o)
 
+	o.NeedsUpdate = false
 	o.SceneID = ext.SceneID
 	o.Title = ext.Title
 	o.SceneType = ext.SceneType
@@ -88,7 +200,9 @@ func SceneCreateUpdateFromExternal(db *gorm.DB, ext scrape.ScrapedScene) error {
 	o.Duration = ext.Duration
 	o.Synopsis = ext.Synopsis
 	o.ReleaseDateText = ext.Released
-	o.CoverURL = ext.Covers[0]
+	if ext.Covers != nil {
+		o.CoverURL = ext.Covers[0]
+	}
 	o.SceneURL = ext.HomepageURL
 
 	if ext.Released != "" {
@@ -131,7 +245,7 @@ func SceneCreateUpdateFromExternal(db *gorm.DB, ext scrape.ScrapedScene) error {
 	// Clean & Associate Tags
 	var tmpTag Tag
 	for _, name := range ext.Tags {
-		tagClean := convertTag(name)
+		tagClean := ConvertTag(name)
 		if tagClean != "" {
 			tmpTag = Tag{}
 			db.Where(&Tag{Name: tagClean}).FirstOrCreate(&tmpTag)

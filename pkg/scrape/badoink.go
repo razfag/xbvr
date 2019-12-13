@@ -1,68 +1,33 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeBadoink(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("badoinkvr.com", "babevr.com", "vrcosplayx.com", "18vr.com", "kinkvr.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-	)
+func BadoinkSite(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene, scraperID string, siteID string, URL string) error {
+	defer wg.Done()
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("badoinkvr.com", "babevr.com", "vrcosplayx.com", "18vr.com", "kinkvr.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-	trailerCollector := sceneCollector.Clone()
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	trailerCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("badoinkvr.com", "babevr.com", "vrcosplayx.com", "18vr.com", "kinkvr.com")
+	siteCollector := createCollector("badoinkvr.com", "babevr.com", "vrcosplayx.com", "18vr.com", "kinkvr.com")
+	trailerCollector := cloneCollector(sceneCollector)
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "Badoink"
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		// Site ID
-		if e.Request.URL.Host == "badoinkvr.com" {
-			sc.Site = "BadoinkVR"
-		}
-
-		if e.Request.URL.Host == "babevr.com" {
-			sc.Site = "BabeVR"
-		}
-
-		if e.Request.URL.Host == "vrcosplayx.com" {
-			sc.Site = "VRCosplayX"
-		}
-
-		if e.Request.URL.Host == "18vr.com" {
-			sc.Site = "18VR"
-		}
-
-		if e.Request.URL.Host == "kinkvr.com" {
-			sc.Site = "KinkVR"
-		}
+		sc.Site = siteID
 
 		// Scene ID - get from URL
 		tmp := strings.Split(sc.HomepageURL, "-")
@@ -122,7 +87,7 @@ func ScrapeBadoink(knownScenes []string, out *[]ScrapedScene) error {
 	})
 
 	trailerCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := e.Request.Ctx.GetAny("scene").(ScrapedScene)
+		sc := e.Request.Ctx.GetAny("scene").(models.ScrapedScene)
 
 		e.ForEach(`dl8-video source`, func(id int, e *colly.HTMLElement) {
 			if id == 0 {
@@ -141,7 +106,7 @@ func ScrapeBadoink(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`div.pagination a`, func(e *colly.HTMLElement) {
@@ -158,11 +123,39 @@ func ScrapeBadoink(knownScenes []string, out *[]ScrapedScene) error {
 		}
 	})
 
-	siteCollector.Visit("https://badoinkvr.com/vrpornvideos")
-	siteCollector.Visit("https://18vr.com/vrpornvideos")
-	siteCollector.Visit("https://vrcosplayx.com/cosplaypornvideos")
-	siteCollector.Visit("https://babevr.com/vrpornvideos")
-	siteCollector.Visit("https://kinkvr.com/bdsm-vr-videos")
+	siteCollector.Visit(URL)
 
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
 	return nil
+}
+
+func BadoinkVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return BadoinkSite(wg, updateSite, knownScenes, out, "badoinkvr", "BadoinkVR", "https://badoinkvr.com/vrpornvideos")
+}
+
+func B18VR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return BadoinkSite(wg, updateSite, knownScenes, out, "18vr", "18VR", "https://18vr.com/vrpornvideos")
+}
+
+func VRCosplayX(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return BadoinkSite(wg, updateSite, knownScenes, out, "vrcosplayx", "VRCosplayX", "https://vrcosplayx.com/cosplaypornvideos")
+}
+
+func BabeVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return BadoinkSite(wg, updateSite, knownScenes, out, "babevr", "BabeVR", "https://babevr.com/vrpornvideos")
+}
+
+func KinkVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return BadoinkSite(wg, updateSite, knownScenes, out, "kinkvr", "KinkVR", "https://kinkvr.com/bdsm-vr-videos")
+}
+
+func init() {
+	registerScraper("badoinkvr", "BadoinkVR", "https://twivatar.glitch.me/badoinkofficial", BadoinkVR)
+	registerScraper("18vr", "18VR", "https://twivatar.glitch.me/18vrofficial", B18VR)
+	registerScraper("vrcosplayx", "VRCosplayX", "https://twivatar.glitch.me/vrcosplayx", VRCosplayX)
+	registerScraper("babevr", "BabeVR", "https://babevr.com/babevr_icons/apple-touch-icon.png", BabeVR)
+	registerScraper("kinkvr", "KinkVR", "https://kinkvr.com/kinkvr_icons/apple-touch-icon.png", KinkVR)
 }

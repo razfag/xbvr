@@ -1,43 +1,60 @@
 package xbvr
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
+	"strings"
 
-	"github.com/cld9x/xbvr/pkg/assets"
 	"github.com/emicklei/go-restful"
-	"github.com/gammazero/nexus/router"
-	"github.com/gammazero/nexus/wamp"
+	restfulspec "github.com/emicklei/go-restful-openapi"
+	"github.com/gammazero/nexus/v3/router"
+	"github.com/gammazero/nexus/v3/wamp"
+	"github.com/go-openapi/spec"
+	"github.com/gorilla/mux"
 	wwwlog "github.com/gowww/log"
 	"github.com/gregjones/httpcache/diskcache"
 	"github.com/koding/websocketproxy"
 	"github.com/peterbourgon/diskv"
 	"github.com/rs/cors"
+	"github.com/xbapps/xbvr/pkg/assets"
+	"github.com/xbapps/xbvr/pkg/common"
+	"github.com/xbapps/xbvr/pkg/migrations"
+	"github.com/xbapps/xbvr/pkg/models"
 	"willnorris.com/go/imageproxy"
 )
 
 var (
-	DEBUG          = os.Getenv("DEBUG")
-	httpAddr       = "0.0.0.0:9999"
-	wsAddr         = "0.0.0.0:9998"
+	DEBUG          = common.DEBUG
+	DLNA           = common.DLNA
+	httpAddr       = common.HttpAddr
+	wsAddr         = common.WsAddr
 	currentVersion = ""
 )
 
 func StartServer(version, commit, branch, date string) {
 	currentVersion = version
 
+	migrations.Migrate()
+
 	// Remove old locks
-	RemoveLock("scrape")
-	RemoveLock("update-scenes")
+	models.RemoveLock("index")
+	models.RemoveLock("scrape")
+	models.RemoveLock("update-scenes")
 
 	go CheckDependencies()
-	CheckVolumes()
+	models.CheckVolumes()
+
+	models.InitSites()
 
 	// API endpoints
 	ws := new(restful.WebService)
-	ws.Route(ws.GET("/").To(redirectUI))
+	ws.Route(ws.GET("/").To(func(req *restful.Request, resp *restful.Response) {
+		resp.AddHeader("Location", "/ui/")
+		resp.WriteHeader(http.StatusFound)
+	}))
 
 	restful.Add(ws)
 	restful.Add(SceneResource{}.WebService())
@@ -45,6 +62,42 @@ func StartServer(version, commit, branch, date string) {
 	restful.Add(DMSResource{}.WebService())
 	restful.Add(ConfigResource{}.WebService())
 	restful.Add(FilesResource{}.WebService())
+	restful.Add(DeoVRResource{}.WebService())
+	restful.Add(SecurityResource{}.WebService())
+
+	config := restfulspec.Config{
+		WebServices: restful.RegisteredWebServices(),
+		APIPath:     "/api.json",
+		PostBuildSwaggerObjectHandler: func(swo *spec.Swagger) {
+			var e = spec.VendorExtensible{}
+			e.AddExtension("x-logo", map[string]interface{}{
+				"url": "/ui/icons/xbvr-512.png",
+			})
+
+			swo.Info = &spec.Info{
+				InfoProps: spec.InfoProps{
+					Title:   "XBVR API",
+					Version: currentVersion,
+				},
+				VendorExtensible: e,
+			}
+			swo.Tags = []spec.Tag{
+				{
+					TagProps: spec.TagProps{
+						Name:        "Config",
+						Description: "Endpoints used by options screen",
+					},
+				},
+				{
+					TagProps: spec.TagProps{
+						Name:        "DeoVR",
+						Description: "Endpoints for interfacing with DeoVR player",
+					},
+				},
+			}
+		},
+	}
+	restful.Add(restfulspec.NewOpenAPIService(config))
 
 	// Static files
 	if DEBUG == "" {
@@ -54,12 +107,16 @@ func StartServer(version, commit, branch, date string) {
 	}
 
 	// Imageproxy
-	p := imageproxy.NewProxy(nil, diskCache(filepath.Join(appDir, "imageproxy")))
+	r := mux.NewRouter()
+	p := imageproxy.NewProxy(nil, diskCache(filepath.Join(common.AppDir, "imageproxy")))
 	p.UserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/73.0.3683.103 Safari/537.36"
-	http.Handle("/img/", http.StripPrefix("/img", p))
+	r.PathPrefix("/img/").Handler(http.StripPrefix("/img", p))
+	r.SkipClean(true)
+
+	r.PathPrefix("/").Handler(http.DefaultServeMux)
 
 	// CORS
-	handler := cors.Default().Handler(http.DefaultServeMux)
+	handler := cors.Default().Handler(r)
 
 	// WAMP router
 	routerConfig := &router.Config{
@@ -73,7 +130,7 @@ func StartServer(version, commit, branch, date string) {
 		},
 	}
 
-	wampRouter, err := router.NewRouter(routerConfig, log)
+	wampRouter, err := router.NewRouter(routerConfig, &log)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -101,17 +158,30 @@ func StartServer(version, commit, branch, date string) {
 	})
 
 	// Attach logrus hook
-	wampHook := NewWampHook()
+	wampHook := common.NewWampHook()
 	log.AddHook(wampHook)
-
 
 	log.Infof("XBVR %v (build date %v) starting...", version, date)
 
 	// DMS
-	go StartDMS()
+	log.Info("DLNA Enabled: ", DLNA)
+	if DLNA {
+		go StartDMS()
+	}
 
-	log.Infof("Web UI available at http://%v/", httpAddr)
-	log.Infof("Database file stored at %s", appDir)
+	// Cron
+	SetupCron()
+
+	addrs, _ := net.InterfaceAddrs()
+	ips := []string{}
+	for _, addr := range addrs {
+		ip, _ := addr.(*net.IPNet)
+		if ip.IP.To4() != nil {
+			ips = append(ips, fmt.Sprintf("http://%v:9999/", ip.IP))
+		}
+	}
+	log.Infof("Web UI available at %s", strings.Join(ips, ", "))
+	log.Infof("Database file stored at %s", common.AppDir)
 
 	if DEBUG == "" {
 		log.Fatal(http.ListenAndServe(httpAddr, handler))
@@ -119,11 +189,6 @@ func StartServer(version, commit, branch, date string) {
 		log.Infof("Running in DEBUG mode")
 		log.Fatal(http.ListenAndServe(httpAddr, wwwlog.Handle(handler, &wwwlog.Options{Color: true})))
 	}
-}
-
-func redirectUI(req *restful.Request, resp *restful.Response) {
-	resp.AddHeader("Location", "/ui/")
-	resp.WriteHeader(http.StatusFound)
 }
 
 func diskCache(path string) *diskcache.Cache {

@@ -1,40 +1,29 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeCzechVR(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("www.czechvrnetwork.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-		colly.MaxDepth(5),
-	)
+func CzechVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "czechvr"
+	siteID := "CzechVR"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("www.czechvrnetwork.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("www.czechvrnetwork.com")
+	siteCollector := createCollector("www.czechvrnetwork.com")
+	siteCollector.MaxDepth = 5
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "CzechVR"
 		sc.Site = "Czech VR"
@@ -125,7 +114,7 @@ func ScrapeCzechVR(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`div#StrankovaniDesktop span.stred a,div#StrankovaniDesktopHome span.stred a`, func(e *colly.HTMLElement) {
@@ -144,5 +133,13 @@ func ScrapeCzechVR(knownScenes []string, out *[]ScrapedScene) error {
 
 	siteCollector.Visit("https://www.czechvrnetwork.com/vr-porn-videos?next=1")
 
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
 	return nil
+}
+
+func init() {
+	registerScraper("czechvr", "Czech VR (all sites)", "https://twivatar.glitch.me/czechvr", CzechVR)
 }

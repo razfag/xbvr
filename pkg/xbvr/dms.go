@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/cld9x/xbvr/pkg/assets"
-	"github.com/cld9x/xbvr/pkg/dms/dlna/dms"
+	"github.com/xbapps/xbvr/pkg/assets"
+	"github.com/xbapps/xbvr/pkg/dms/dlna/dms"
 )
 
 type dmsConfig struct {
@@ -24,17 +24,20 @@ type dmsConfig struct {
 	IgnoreUnreadable    bool
 }
 
-func StartDMS() {
+var dmsServer *dms.Server
+var dmsStarted bool
+
+func initDMS() {
 	var config = &dmsConfig{
-		Path:             "",
-		IfName:           "",
-		Http:             ":1338",
-		FriendlyName:     "",
-		LogHeaders:       false,
-		NotifyInterval:   30 * time.Second,
+		Path:           "",
+		IfName:         "",
+		Http:           ":1338",
+		FriendlyName:   "",
+		LogHeaders:     false,
+		NotifyInterval: 30 * time.Second,
 	}
 
-	dmsServer := &dms.Server{
+	dmsServer = &dms.Server{
 		Interfaces: func(ifName string) (ifs []net.Interface) {
 			var err error
 			if ifName == "" {
@@ -92,20 +95,28 @@ func StartDMS() {
 		IgnoreHidden:        config.IgnoreHidden,
 		IgnoreUnreadable:    config.IgnoreUnreadable,
 	}
+}
+
+func StartDMS() {
+	initDMS()
 	go func() {
 		log.Info("Starting DMS")
 		if err := dmsServer.Serve(); err != nil {
 			log.Fatal(err)
 		}
 	}()
-	// sigs := make(chan os.Signal, 1)
-	// signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
-	// <-sigs
-	// err := dmsServer.Close()
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// if err := cache.save(config.FFprobeCachePath); err != nil {
-	// 	log.Print(err)
-	// }
+	dmsStarted = true
+}
+
+func StopDMS() {
+	log.Info("Stopping DMS")
+	err := dmsServer.Close()
+	if err != nil {
+		log.Fatal(err)
+	}
+	dmsStarted = false
+}
+
+func IsDMSStarted() bool {
+	return dmsStarted
 }

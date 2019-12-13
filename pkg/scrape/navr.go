@@ -1,43 +1,32 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/robertkrimen/otto"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeNA(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("www.naughtyamerica.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-	)
+func NaughtyAmericaVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "naughtyamericavr"
+	siteID := "NaughtyAmerica VR"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("www.naughtyamerica.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("www.naughtyamerica.com")
+	siteCollector := createCollector("www.naughtyamerica.com")
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "NaughtyAmerica"
-		sc.Site = "NaughtyAmerica VR"
+		sc.Site = siteID
 		sc.Title = ""
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
@@ -80,12 +69,12 @@ func ScrapeNA(knownScenes []string, out *[]ScrapedScene) error {
 			// images5.naughtycdn.com/cms/nacmscontent/v1/scenes/2cst/nikkijaclynmarco/scene/horizontal/1252x708c.jpg
 			base := strings.Split(strings.Replace(e.Attr("src"), "//", "", -1), "/")
 
-			base[8] = "vertical"
-			base[9] = "400x605c.jpg"
-			sc.Covers = append(sc.Covers, "https://"+strings.Join(base, "/"))
-
 			base[8] = "horizontal"
 			base[9] = "1252x708c.jpg"
+			sc.Covers = append(sc.Covers, "https://"+strings.Join(base, "/"))
+
+			base[8] = "vertical"
+			base[9] = "400x605c.jpg"
 			sc.Covers = append(sc.Covers, "https://"+strings.Join(base, "/"))
 		})
 
@@ -98,7 +87,7 @@ func ScrapeNA(knownScenes []string, out *[]ScrapedScene) error {
 
 		// Synopsis
 		e.ForEach(`div.synopsis`, func(id int, e *colly.HTMLElement) {
-			sc.Synopsis = strings.TrimSpace(strings.Replace(e.Text, "Synopsis:", "", -1))
+			sc.Synopsis = strings.TrimSpace(strings.Replace(e.Text, "Synopsis", "", -1))
 		})
 
 		// Tags
@@ -124,7 +113,7 @@ func ScrapeNA(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`ul[class=pagination] li a`, func(e *colly.HTMLElement) {
@@ -141,5 +130,15 @@ func ScrapeNA(knownScenes []string, out *[]ScrapedScene) error {
 		}
 	})
 
-	return siteCollector.Visit("https://www.naughtyamerica.com/vr-porn")
+	siteCollector.Visit("https://www.naughtyamerica.com/vr-porn")
+
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
+	return nil
+}
+
+func init() {
+	registerScraper("naughtyamericavr", "NaughtyAmerica VR", "https://twivatar.glitch.me/naughtyamerica", NaughtyAmericaVR)
 }

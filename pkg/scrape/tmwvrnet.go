@@ -1,43 +1,32 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeTmwVRnet(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("tmwvrnet.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-		colly.MaxDepth(5),
-	)
+func TmwVRnet(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "tmwvrnet"
+	siteID := "TmwVRnet"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("tmwvrnet.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("tmwvrnet.com")
+	siteCollector := createCollector("tmwvrnet.com")
+	siteCollector.MaxDepth = 5
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "TeenMegaWorld"
-		sc.Site = "TmwVRnet"
+		sc.Site = siteID
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		// Date
@@ -95,7 +84,7 @@ func ScrapeTmwVRnet(knownScenes []string, out *[]ScrapedScene) error {
 		// Filenames
 		// NOTE: no way to guess filename
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`ul.pagination a.in_stditem`, func(e *colly.HTMLElement) {
@@ -116,5 +105,13 @@ func ScrapeTmwVRnet(knownScenes []string, out *[]ScrapedScene) error {
 
 	siteCollector.Visit("https://tmwvrnet.com/categories/movies.html")
 
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
 	return nil
+}
+
+func init() {
+	registerScraper("tmwvrnet", "TmwVRnet", "https://twivatar.glitch.me/tmwvrnet", TmwVRnet)
 }

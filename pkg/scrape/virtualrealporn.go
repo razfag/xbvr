@@ -1,53 +1,33 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/robertkrimen/otto"
 	"github.com/thoas/go-funk"
+	"github.com/tidwall/gjson"
+	"github.com/xbapps/xbvr/pkg/models"
+	"gopkg.in/resty.v1"
 )
 
-func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("virtualrealporn.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-	)
+func VirtualRealPornSite(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene, scraperID string, siteID string, URL string) error {
+	defer wg.Done()
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("virtualrealporn.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	castCollector := colly.NewCollector(
-		colly.AllowedDomains("virtualrealporn.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-		colly.AllowURLRevisit(),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	castCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("virtualrealporn.com", "virtualrealtrans.com")
+	siteCollector := createCollector("virtualrealporn.com", "virtualrealtrans.com")
+	castCollector := createCollector("virtualrealporn.com", "virtualrealtrans.com")
+	castCollector.AllowURLRevisit = true
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "VirtualRealPorn"
-		sc.Site = "VirtualRealPorn"
+		sc.Site = siteID
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		var tmpCast []string
@@ -60,7 +40,10 @@ func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
 
 		// Title
 		e.ForEach(`title`, func(id int, e *colly.HTMLElement) {
-			sc.Title = strings.TrimSpace(strings.Replace(e.Text, " - VirtualRealPorn.com", "", -1))
+			sc.Title = e.Text
+			sc.Title = strings.TrimSpace(strings.Replace(sc.Title, "▷ ", "", -1))
+			sc.Title = strings.TrimSpace(strings.Replace(sc.Title, " - VirtualRealPorn.com", "", -1))
+			sc.Title = strings.TrimSpace(strings.Replace(sc.Title, " - VirtualRealTrans.com", "", -1))
 		})
 
 		// Cover URLs
@@ -124,13 +107,12 @@ func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
 				fpName = strings.Replace(fpName, "_-_Trailer", "", -1)
 				fpName = strings.Replace(fpName, "_-_Smartphone", "", -1)
 
-
 				var outFilenames []string
 				postfix := []string{"-_180x180_3dh"}
 
 				for i := range postfix {
-					outFilenames = append(outFilenames, fpName + "_" + postfix[i] + ".mp4")
-					outFilenames = append(outFilenames, strings.Replace(fpName, ".com", "", -1) + "_" + postfix[i] + ".mp4")
+					outFilenames = append(outFilenames, fpName+"_"+postfix[i]+".mp4")
+					outFilenames = append(outFilenames, strings.Replace(fpName, ".com", "", -1)+"_"+postfix[i]+".mp4")
 				}
 
 				sc.Filenames = outFilenames
@@ -144,11 +126,11 @@ func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
 			castCollector.Request("GET", tmpCast[i], nil, ctx, nil)
 		}
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	castCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := e.Request.Ctx.GetAny("scene").(*ScrapedScene)
+		sc := e.Request.Ctx.GetAny("scene").(*models.ScrapedScene)
 
 		var name string
 		e.ForEach(`h1.model-title`, func(id int, e *colly.HTMLElement) {
@@ -162,7 +144,7 @@ func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		if gender == "Female" {
+		if gender == "Female" || gender == "Transgender" {
 			sc.Cast = append(sc.Cast, name)
 		}
 	})
@@ -176,5 +158,50 @@ func ScrapeVirtualRealPorn(knownScenes []string, out *[]ScrapedScene) error {
 		}
 	})
 
-	return siteCollector.Visit("https://virtualrealporn.com/vr-porn-videos/")
+	// Request scenes via ajax interface
+	r, err := resty.R().
+		SetHeader("User-Agent", userAgent).
+		SetHeader("Accept", "application/json, text/javascript, */*; q=0.01").
+		SetHeader("Referer", URL).
+		SetHeader("X-Requested-With", "XMLHttpRequest").
+		SetHeader("Authority", scraperID+".com").
+		SetFormData(map[string]string{
+			"action": "get_videos_list",
+			"p":      "1",
+			"vpp":    "1000",
+			"sq":     "",
+			"so":     "date-DESC",
+			"pid":    "8",
+		}).
+		Post("https://" + scraperID + ".com/wp-admin/admin-ajax.php")
+
+	if err == nil || r.StatusCode() == 200 {
+		urls := gjson.Get(r.String(), "data.movies.#.permalink").Array()
+		for i := range urls {
+			sceneURL := urls[i].String()
+			if !funk.ContainsString(knownScenes, sceneURL) {
+				sceneCollector.Visit(sceneURL)
+			}
+		}
+	}
+
+	siteCollector.Visit(URL)
+
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
+	return nil
+}
+
+func VirtualRealPorn(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return VirtualRealPornSite(wg, updateSite, knownScenes, out, "virtualrealporn", "VirtualRealPorn", "https://virtualrealporn.com/")
+}
+func VirtualRealTrans(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	return VirtualRealPornSite(wg, updateSite, knownScenes, out, "virtualrealtrans", "VirtualRealTrans", "https://virtualrealtrans.com/")
+}
+
+func init() {
+	registerScraper("virtualrealporn", "VirtualRealPorn", "https://twivatar.glitch.me/virtualrealporn", VirtualRealPorn)
+	registerScraper("virtualrealtrans", "VirtualRealTrans", "https://twivatar.glitch.me/virtualrealporn", VirtualRealTrans)
 }

@@ -25,8 +25,9 @@ steps:
       - yarn build
 
   - name: build
-    image: cld9x/goreleaser-xcgo:latest
+    image: xbapps/goreleaser-xcgo:latest
     environment:
+      GOPROXY: "https://proxy.golang.org/"
       GITHUB_TOKEN:
         from_secret: GITHUB_TOKEN
     when:
@@ -45,6 +46,8 @@ steps:
         from_secret: DOCKER_LOGIN
       password:
         from_secret: DOCKER_PASSWORD
-      repo: cld9x/xbvr
+      repo: xbapps/xbvr
       auto_tag: true
+      tags: latest
       build_args: DRONE_TAG=${DRONE_TAG}
+      dockerfile: .drone.dockerfile

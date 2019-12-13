@@ -1,43 +1,32 @@
 package scrape
 
 import (
-	"log"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeStasyQVR(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("stasyqvr.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-		colly.MaxDepth(5),
-	)
+func StasyQVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "stasyqvr"
+	siteID := "StasyQVR"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("stasyqvr.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("stasyqvr.com")
+	siteCollector := createCollector("stasyqvr.com")
+	siteCollector.MaxDepth = 5
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "StasyQ"
-		sc.Site = "StasyQVR"
+		sc.Site = siteID
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		// Scene ID - get from URL
@@ -100,7 +89,7 @@ func ScrapeStasyQVR(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`div.pagination div.select-links a`, func(e *colly.HTMLElement) {
@@ -121,5 +110,13 @@ func ScrapeStasyQVR(knownScenes []string, out *[]ScrapedScene) error {
 
 	siteCollector.Visit("https://stasyqvr.com/virtualreality/list")
 
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
 	return nil
+}
+
+func init() {
+	registerScraper("stasyqvr", "StasyQVR", "https://stasyqvr.com/s/images/apple-touch-icon.png", StasyQVR)
 }

@@ -1,42 +1,31 @@
 package scrape
 
 import (
-	"log"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeVirtualTaboo(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("virtualtaboo.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-	)
+func VirtualTaboo(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "virtualtaboo"
+	siteID := "VirtualTaboo"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("virtualtaboo.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("virtualtaboo.com")
+	siteCollector := createCollector("virtualtaboo.com")
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "VirtualTaboo"
-		sc.Site = "VirtualTaboo"
+		sc.Site = siteID
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		// Scene ID - get from URL
@@ -104,7 +93,7 @@ func ScrapeVirtualTaboo(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`ul.pagination a`, func(e *colly.HTMLElement) {
@@ -121,5 +110,15 @@ func ScrapeVirtualTaboo(knownScenes []string, out *[]ScrapedScene) error {
 		}
 	})
 
-	return siteCollector.Visit("https://virtualtaboo.com/videos")
+	siteCollector.Visit("https://virtualtaboo.com/videos")
+
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
+	return nil
+}
+
+func init() {
+	registerScraper("virtualtaboo", "VirtualTaboo", "https://twivatar.glitch.me/virtualtaboo", VirtualTaboo)
 }

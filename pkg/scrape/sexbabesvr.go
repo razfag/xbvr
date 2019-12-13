@@ -1,43 +1,32 @@
 package scrape
 
 import (
-	"log"
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/gocolly/colly"
 	"github.com/mozillazg/go-slugify"
 	"github.com/nleeper/goment"
 	"github.com/thoas/go-funk"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
-func ScrapeSexBabesVR(knownScenes []string, out *[]ScrapedScene) error {
-	siteCollector := colly.NewCollector(
-		colly.AllowedDomains("sexbabesvr.com"),
-		colly.CacheDir(siteCacheDir),
-		colly.UserAgent(userAgent),
-	)
+func SexBabesVR(wg *sync.WaitGroup, updateSite bool, knownScenes []string, out chan<- models.ScrapedScene) error {
+	defer wg.Done()
+	scraperID := "sexbabesvr"
+	siteID := "SexBabesVR"
+	logScrapeStart(scraperID, siteID)
 
-	sceneCollector := colly.NewCollector(
-		colly.AllowedDomains("sexbabesvr.com"),
-		colly.CacheDir(sceneCacheDir),
-		colly.UserAgent(userAgent),
-	)
-
-	siteCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
-
-	sceneCollector.OnRequest(func(r *colly.Request) {
-		log.Println("visiting", r.URL.String())
-	})
+	sceneCollector := createCollector("sexbabesvr.com")
+	siteCollector := createCollector("sexbabesvr.com")
 
 	sceneCollector.OnHTML(`html`, func(e *colly.HTMLElement) {
-		sc := ScrapedScene{}
+		sc := models.ScrapedScene{}
 		sc.SceneType = "VR"
 		sc.Studio = "SexBabesVR"
-		sc.Site = "SexBabesVR"
+		sc.Site = siteID
 		sc.HomepageURL = strings.Split(e.Request.URL.String(), "?")[0]
 
 		// Scene ID - get from URL
@@ -108,7 +97,7 @@ func ScrapeSexBabesVR(knownScenes []string, out *[]ScrapedScene) error {
 			}
 		})
 
-		*out = append(*out, sc)
+		out <- sc
 	})
 
 	siteCollector.OnHTML(`div.pager li.is-active a`, func(e *colly.HTMLElement) {
@@ -127,5 +116,13 @@ func ScrapeSexBabesVR(knownScenes []string, out *[]ScrapedScene) error {
 
 	siteCollector.Visit("https://sexbabesvr.com/virtualreality/list")
 
+	if updateSite {
+		updateSiteLastUpdate(scraperID)
+	}
+	logScrapeFinished(scraperID, siteID)
 	return nil
+}
+
+func init() {
+	registerScraper("sexbabesvr", "SexBabesVR", "https://sexbabesvr.com/s/images/favicons/apple-touch-icon.png", SexBabesVR)
 }

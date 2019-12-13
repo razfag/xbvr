@@ -1,23 +1,33 @@
 package xbvr
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/emicklei/go-restful"
 	"github.com/emicklei/go-restful-openapi"
 	"github.com/jinzhu/gorm"
+	"github.com/xbapps/xbvr/pkg/models"
 )
 
 type DMSDataResponse struct {
-	Sites        []string     `json:"sites"`
-	Actors       []string     `json:"actors"`
-	Tags         []string     `json:"tags"`
-	ReleaseGroup []string     `json:"release_group"`
-	Volumes      []Volume `json:"volumes"`
+	Sites        []string        `json:"sites"`
+	Actors       []string        `json:"actors"`
+	Tags         []string        `json:"tags"`
+	ReleaseGroup []string        `json:"release_group"`
+	Volumes      []models.Volume `json:"volumes"`
 }
 
 type DMSResource struct{}
+
+var (
+	lastSessionID      uint
+	lastSessionSceneID uint
+	lastSessionStart   time.Time
+	lastSessionEnd     time.Time
+)
 
 func (i DMSResource) WebService() *restful.WebService {
 	tags := []string{"DMS"}
@@ -47,14 +57,14 @@ func (i DMSResource) WebService() *restful.WebService {
 func (i DMSResource) sceneById(req *restful.Request, resp *restful.Response) {
 	sceneId := req.QueryParameter("id")
 
-	db, _ := GetDB()
+	db, _ := models.GetDB()
 	defer db.Close()
 
-	var scene Scene
+	var scene models.Scene
 	db.Preload("Cast").
 		Preload("Tags").
 		Preload("Files").
-		Where(&Scene{SceneID: sceneId}).First(&scene)
+		Where(&models.Scene{SceneID: sceneId}).First(&scene)
 
 	resp.WriteHeaderAndEntity(http.StatusOK, scene)
 }
@@ -65,21 +75,21 @@ func (i DMSResource) fileById(req *restful.Request, resp *restful.Response) {
 		return
 	}
 
-	db, _ := GetDB()
+	db, _ := models.GetDB()
 	defer db.Close()
 
-	var file File
-	db.Where(&File{ID: uint(fileId)}).First(&file)
+	var file models.File
+	db.Where(&models.File{ID: uint(fileId)}).First(&file)
 
 	resp.WriteHeaderAndEntity(http.StatusOK, file)
 }
 
 func (i DMSResource) base(req *restful.Request, resp *restful.Response) {
-	db, _ := GetDB()
+	db, _ := models.GetDB()
 	defer db.Close()
 
 	// Get all accessible scenes
-	var scenes []Scene
+	var scenes []models.Scene
 	tx := db.
 		Model(&scenes).
 		Preload("Cast").
@@ -130,13 +140,14 @@ func (i DMSResource) base(req *restful.Request, resp *restful.Response) {
 	}
 
 	// Available volumes
-	var vol []Volume
+	var vol []models.Volume
 	db.Where("is_available = ?", true).Find(&vol)
 
 	resp.WriteHeaderAndEntity(http.StatusOK, DMSDataResponse{Sites: outSites, Tags: outTags, Actors: outCast, Volumes: vol, ReleaseGroup: outRelease})
 }
 
 func (i DMSResource) getFile(req *restful.Request, resp *restful.Response) {
+	doNotTrack := req.QueryParameter("dnt")
 	id, err := strconv.Atoi(req.PathParameter("file-id"))
 	if err != nil {
 		resp.WriteHeader(http.StatusBadRequest)
@@ -144,16 +155,96 @@ func (i DMSResource) getFile(req *restful.Request, resp *restful.Response) {
 	}
 
 	// Check if scene exist
-	db, _ := GetDB()
+	db, _ := models.GetDB()
 	defer db.Close()
 
-	f := File{}
-	err = db.First(&f, id).Error
+	f := models.File{}
+	err = db.Preload("Volume").First(&f, id).Error
 
-	if err == gorm.ErrRecordNotFound {
-		resp.WriteHeader(http.StatusNotFound)
-		return
+	switch f.Volume.Type {
+	case "local":
+		// Track current session
+		if f.SceneID != 0 && doNotTrack == "" {
+			if lastSessionSceneID != f.SceneID {
+				if lastSessionID != 0 {
+					watchSessionFlush()
+				}
+
+				lastSessionSceneID = f.SceneID
+				lastSessionStart = time.Now()
+				newWatchSession()
+			}
+		}
+
+		if err == gorm.ErrRecordNotFound {
+			resp.WriteHeader(http.StatusNotFound)
+			return
+		}
+
+		ctx := req.Request.Context()
+		http.ServeFile(resp.ResponseWriter, req.Request, f.GetPath())
+		select {
+		case <-ctx.Done():
+			lastSessionEnd = time.Now()
+			if doNotTrack == "" {
+				watchSessionFlush()
+			}
+			return
+		default:
+		}
+	case "putio":
+		id, err := strconv.ParseInt(f.Path, 10, 64)
+		if err != nil {
+			return
+		}
+		client := f.Volume.GetPutIOClient()
+		url, err := client.Files.URL(context.Background(), id, false)
+		if err != nil {
+			return
+		}
+		http.Redirect(resp.ResponseWriter, req.Request, url, 302)
+	}
+}
+
+func newWatchSession() {
+	obj := models.History{SceneID: lastSessionSceneID, TimeStart: lastSessionStart}
+	obj.Save()
+
+	var scene models.Scene
+	err := scene.GetIfExistByPK(lastSessionSceneID)
+	if err == nil {
+		scene.LastOpened = time.Now()
+		scene.Save()
 	}
 
-	http.ServeFile(resp.ResponseWriter, req.Request, f.GetPath())
+	lastSessionID = obj.ID
+}
+
+func watchSessionFlush() {
+	var obj models.History
+	err := obj.GetIfExist(lastSessionID)
+	if err == nil {
+		obj.TimeEnd = lastSessionEnd
+		obj.Duration = time.Since(lastSessionStart).Seconds()
+		obj.Save()
+
+		var scene models.Scene
+		err := scene.GetIfExistByPK(lastSessionSceneID)
+		if err == nil {
+			if !scene.IsWatched {
+				scene.IsWatched = true
+				scene.Save()
+			}
+		}
+
+		log.Infof("Session #%v duration for scene #%v is %v", lastSessionID, lastSessionSceneID, time.Since(lastSessionStart).Seconds())
+	}
+}
+
+func checkForDeadSession() {
+	if time.Since(lastSessionEnd).Seconds() > 60 && lastSessionSceneID != 0 && lastSessionID != 0 {
+		watchSessionFlush()
+		lastSessionID = 0
+		lastSessionSceneID = 0
+	}
 }
